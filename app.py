@@ -1,86 +1,125 @@
 import streamlit as st
+from kiteconnect import KiteConnect
 import pandas as pd
-import datetime as dt
-import time
-import numpy as np
+import json
+import datetime
+from bs_calculator import bs_delta
+import math
 
-# Simulated data fetching function (replace with real API logic)
-@st.cache_data(ttl=120)
-def fetch_option_data():
-    now = dt.datetime.now()
-    strikes = list(range(22500, 23500, 50))
-    data = []
-    for strike in strikes:
-        call_iv = np.random.uniform(12, 18)
-        put_iv = np.random.uniform(12, 18)
-        delta_call = round(np.random.uniform(0.15, 0.25), 2)
-        delta_put = round(np.random.uniform(-0.25, -0.15), 2)
-        data.append({
-            "strike": strike,
-            "call_iv": round(call_iv, 2),
-            "put_iv": round(put_iv, 2),
-            "delta_call": delta_call,
-            "delta_put": delta_put,
-            "oi_call": np.random.randint(50000, 150000),
-            "oi_put": np.random.randint(50000, 150000)
-        })
-    return pd.DataFrame(data), now.strftime("%H:%M:%S")
+API_KEY = "nko9pc95w5cv8edn"
 
-# App title
-st.title("Nifty Iron Condor Option Seller Dashboard 🦉")
-st.caption("Auto-refresh every 2 minutes | Built for ₹2 lakh capital")
+# Load token from token.json
+def load_access_token():
+    with open("token.json", "r") as f:
+        return json.load(f)["access_token"]
 
-# Fetch data
-df, updated_time = fetch_option_data()
-st.write(f"**Last updated:** {updated_time}")
+# Set up Kite Connect
+def get_kite_client():
+    access_token = load_access_token()
+    kite = KiteConnect(api_key=API_KEY)
+    kite.set_access_token(access_token)
+    return kite
 
-# Filter based on delta criteria
-condor_range = df[
-    (df["delta_call"].between(0.15, 0.20)) &
-    (df["delta_put"].between(-0.20, -0.15))
-]
+# Fetch NIFTY option chain from Kite
+def fetch_nifty_option_chain(kite):
+    instruments = kite.instruments("NFO")
+    today = datetime.date.today()
 
-if not condor_range.empty:
-    st.success("✅ Iron Condor Opportunity Found")
-    best_strike = condor_range.iloc[len(condor_range)//2]
-    st.write("### Suggested Setup (±0.15-0.20 delta):")
-    st.code(f"""
-Sell Call: {best_strike.strike + 50} CE (Δ ≈ {best_strike.delta_call})
-Sell Put:  {best_strike.strike - 50} PE (Δ ≈ {best_strike.delta_put})
-Buy Hedge Call: {best_strike.strike + 150} CE
-Buy Hedge Put:  {best_strike.strike - 150} PE
-    """)
-else:
-    st.warning("❌ No suitable strikes found in the 0.15–0.20 delta range.")
+    option_data = []
+    for inst in instruments:
+        if (
+            "NIFTY" in inst["name"]
+            and inst["segment"] == "NFO-OPT"
+            and inst["instrument_type"] in ["CE", "PE"]
+            and inst["expiry"] > today
+        ):
+            option_data.append(inst)
 
-# Trade log section
-st.markdown("---")
-st.subheader("📘 Log Your Trades")
+    return pd.DataFrame(option_data)
 
-if "log" not in st.session_state:
-    st.session_state["log"] = []
+# Fetch LTPs for selected strikes
+def get_ltp(kite, tradingsymbols):
+    try:
+        response = kite.ltp(["NFO:" + ts for ts in tradingsymbols])
+        return {k.split(":")[1]: v["last_price"] for k, v in response.items()}
+    except:
+        return {}
 
-with st.form("trade_logger"):
-    entry = st.text_input("Trade description")
-    profit = st.number_input("Profit / Loss", value=0.0, format="%.2f")
-    note = st.text_area("Note (optional)")
-    submitted = st.form_submit_button("Add Trade")
-    if submitted and entry:
-        st.session_state["log"].append({
-            "time": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "entry": entry,
-            "profit": profit,
-            "note": note
-        })
+# Calculate delta using BS formula
+def calculate_delta(row, spot_price):
+    try:
+        K = row["strike"]
+        T = (row["expiry"] - datetime.date.today()).days / 365
+        r = 0.06  # risk-free rate
+        sigma = 0.18  # estimated IV (or fetch from data)
+        option_type = "call" if row["instrument_type"] == "CE" else "put"
+        return round(bs_delta(spot_price, K, T, r, sigma, option_type), 2)
+    except:
+        return None
 
-# Display log
-if st.session_state["log"]:
-    df_log = pd.DataFrame(st.session_state["log"])
-    st.write("### Trade History")
-    st.dataframe(df_log)
-    total_pnl = df_log["profit"].sum()
-    st.metric("Total P&L", f"₹ {total_pnl:.2f}")
+# Streamlit UI
+def main():
+    st.set_page_config(layout="wide")
+    st.title("🔐 Nifty Iron Condor Dashboard")
 
-# Footer
-st.markdown("---")
-st.caption("Made for Nifty weekly expiry | Auto-refresh every 2 mins | Built by ChatGPT + Streamlit")
+    with st.spinner("Loading live data..."):
+        kite = get_kite_client()
+        oc_df = fetch_nifty_option_chain(kite)
+        spot = kite.ltp("NSE:NIFTY 50")["NSE:NIFTY 50"]["last_price"]
+
+    st.metric("📈 NIFTY Spot", round(spot, 2))
+
+    # Filter near expiry options
+    expiry = oc_df["expiry"].min()
+    oc_df = oc_df[oc_df["expiry"] == expiry]
+
+    # Select 100 strikes around ATM
+    atm_range = 500
+    oc_df = oc_df[
+        (oc_df["strike"] > spot - atm_range) & (oc_df["strike"] < spot + atm_range)
+    ]
+
+    # Fetch LTPs
+    ts_list = oc_df["tradingsymbol"].tolist()
+    ltp_map = get_ltp(kite, ts_list)
+    oc_df["ltp"] = oc_df["tradingsymbol"].map(ltp_map)
+
+    # Calculate delta
+    oc_df["delta"] = oc_df.apply(lambda row: calculate_delta(row, spot), axis=1)
+
+    # Display full option chain
+    with st.expander("📊 Full Option Chain"):
+        st.dataframe(
+            oc_df[["tradingsymbol", "strike", "instrument_type", "ltp", "delta"]]
+            .sort_values("strike")
+            .reset_index(drop=True)
+        )
+
+    # Suggest Iron Condor strikes
+    ce_candidates = oc_df[
+        (oc_df["instrument_type"] == "CE") & (oc_df["delta"].between(0.12, 0.18))
+    ].sort_values("strike")
+
+    pe_candidates = oc_df[
+        (oc_df["instrument_type"] == "PE") & (oc_df["delta"].between(-0.18, -0.12))
+    ].sort_values("strike", ascending=False)
+
+    st.subheader("🦾 Iron Condor Suggestion (±0.15 Delta)")
+
+    if not ce_candidates.empty and not pe_candidates.empty:
+        sell_ce = ce_candidates.iloc[0]
+        sell_pe = pe_candidates.iloc[0]
+
+        st.write("🔹 **Sell CE**:", sell_ce["tradingsymbol"], "| Strike:", sell_ce["strike"], "| Δ:", sell_ce["delta"])
+        st.write("🔹 **Sell PE**:", sell_pe["tradingsymbol"], "| Strike:", sell_pe["strike"], "| Δ:", sell_pe["delta"])
+
+        st.info("You can now manually sell these strikes and define wings based on your risk appetite.")
+    else:
+        st.warning("No strikes found with desired delta. Try widening the range.")
+
+    # Auto-refresh every 2 minutes
+    st.caption("⏱ Refreshing every 2 minutes...")
+    st.experimental_rerun()
+
+if __name__ == "__main__":
+    main()
