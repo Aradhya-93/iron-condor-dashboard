@@ -3,3 +3,4 @@ pandas
 kiteconnect
 numpy
 scipy
+streamlit-autorefresh
