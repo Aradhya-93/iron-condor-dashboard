@@ -1,4 +1,6 @@
 from kiteconnect import KiteConnect
+import os
+
 
 # 🔐 Your Zerodha API credentials
 API_KEY = os.environ["Z_API_KEY"]
