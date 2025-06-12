@@ -1,0 +1,25 @@
+name: Generate Zerodha Access Token
+
+on:
+  workflow_dispatch:  # Run manually
+
+jobs:
+  generate-token:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install KiteConnect
+        run: pip install kiteconnect
+
+      - name: Run the script to generate access token
+        run: python generate_access_token.py
+        env:
+          Z_API_KEY: ${{ secrets.Z_API_KEY }}
+          Z_API_SECRET: ${{ secrets.Z_API_SECRET }}
+          Z_REQUEST_TOKEN: ${{ secrets.Z_REQUEST_TOKEN }}
