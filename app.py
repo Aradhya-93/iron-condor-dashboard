@@ -43,13 +43,17 @@ def get_ltp(kite, tradingsymbols):
 def calculate_delta(row, spot_price):
     try:
         K = row["strike"]
-        T = (row["expiry"] - datetime.date.today()).days / 365
+        days_to_expiry = (row["expiry"] - datetime.date.today()).days
+        T = max(days_to_expiry, 1) / 365  # Minimum 1 day to avoid zero division
         r = 0.06  # risk-free rate
-        sigma = 0.18  # estimated IV or fetch from live data
+        sigma = 0.18  # estimated IV (can later replace with live IV)
         option_type = "call" if row["instrument_type"] == "CE" else "put"
-        return round(bs_delta(spot_price, K, T, r, sigma, option_type), 2)
-    except:
+        delta = bs_delta(spot_price, K, T, r, sigma, option_type)
+        return round(delta, 2)
+    except Exception as e:
+        print(f"Delta calc error for {row.get('tradingsymbol', 'NA')}: {e}")
         return None
+
 
 def main():
     st.set_page_config(layout="wide")
