@@ -1,8 +1,8 @@
 from kiteconnect import KiteConnect
 
 # 🔐 Your Zerodha API credentials
-API_KEY = "your_api_key"
-API_SECRET = "your_api_secret"
+API_KEY = os.environ["Z_API_KEY"]
+API_SECRET = os.environ["Z_API_SECRET"]
 
 def generate_access_token(request_token):
     kite = KiteConnect(api_key=API_KEY)
