@@ -27,7 +27,8 @@ def fetch_nifty_option_chain(kite):
         if "NIFTY" in inst["name"]
         and inst["segment"] == "NFO-OPT"
         and inst["instrument_type"] in ["CE", "PE"]
-        and inst["expiry"] > today
+        and inst["expiry"] >= today
+
     ]
     return pd.DataFrame(option_data)
 
